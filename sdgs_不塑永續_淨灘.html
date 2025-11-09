@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SDGs 不塑永續-淨灘</title>
+  <style>
+    :root{
+      --sand:#f2d6a9;
+      --sea:#66c2ff;
+      --sky:#bde9ff;
+      --header-bg:rgba(255,255,255,0.6);
+      --score-bg:rgba(255,255,255,0.7);
+    }
+    html,body{height:100%;margin:0;font-family:Arial, "Noto Sans TC", sans-serif}
+    body{
+      background: linear-gradient(to bottom, var(--sky) 0%, var(--sea) 45%, var(--sand) 45% 100%);
+      overflow:hidden;
+    }
+    header{
+      position:fixed;top:0;left:0;right:0;height:72px;display:flex;align-items:center;justify-content:space-between;padding:12px 18px;box-sizing:border-box;z-index:50;
+    }
+    .title{font-size:24px;font-weight:800;align-self:flex-start;}
+    .title strong{font-size:28px}
+    .left{display:flex;align-items:center;gap:12px}
+    .scorebox{position:fixed;right:18px;top:12px;background:var(--score-bg);padding:10px 14px;border-radius:10px;box-shadow:0 4px 8px rgba(0,0,0,.08);z-index:60}
+    .scorebox div{font-weight:700}
+
+    /* game area */
+    .game-wrap{position:absolute;left:0;right:0;top:72px;bottom:0;overflow:hidden}
+    .beach-area{position:relative;width:100%;height:100%;}
+    /* only place trash in lower half of visible area */
+    .trash{position:absolute;user-select:none;cursor:pointer;transform-origin:center center;transition:transform 300ms ease, opacity 300ms ease;display:flex;align-items:center;justify-content:center;font-size:22px}
+    .trash.small{width:34px;height:34px}
+    .trash.medium{width:48px;height:48px;font-size:26px}
+    .trash.large{width:72px;height:72px;font-size:34px}
+    .trash .label{pointer-events:none}
+
+    .collected{opacity:0;transform:scale(.2) rotate(720deg)}
+
+    /* HUD */
+    .hud{position:fixed;left:18px;top:12px;background:var(--header-bg);padding:10px 14px;border-radius:10px;z-index:60}
+    .remaining{font-size:13px}
+
+    /* overlay */
+    .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(rgba(0,0,0,.2),rgba(0,0,0,.4));z-index:100;opacity:0;pointer-events:none;transition:opacity 200ms}
+    .overlay.show{opacity:1;pointer-events:all}
+    .dialog{background:white;padding:28px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);text-align:center}
+    .dialog h2{margin:0 0 8px 0}
+    .btn{display:inline-block;padding:10px 16px;border-radius:8px;background:#2b8aef;color:white;text-decoration:none;margin-top:12px}
+    /* small responsive tweaks */
+    @media (max-width:480px){.title{font-size:18px}.scorebox{right:8px;top:8px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="left">
+      <div class="title">SDGs 不塑永續-淨灘</div>
+    </div>
+    <div class="scorebox">
+      <div id="score">分數: 0</div>
+      <div id="best" style="font-weight:500;font-size:13px">收集: 0 / 50</div>
+    </div>
+  </header>
+
+  <div class="game-wrap">
+    <div id="beach" class="beach-area"></div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="dialog">
+      <h2 id="overlay-title">任務成功</h2>
+      <p id="overlay-msg">你已將海灘清理乾淨！</p>
+      <a href="#" id="next-btn" class="btn">前往下一關</a>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const TRASH_COUNT = 50;
+      const beach = document.getElementById('beach');
+      const scoreEl = document.getElementById('score');
+      const bestEl = document.getElementById('best');
+      const overlay = document.getElementById('overlay');
+      const overlayTitle = document.getElementById('overlay-title');
+      const overlayMsg = document.getElementById('overlay-msg');
+      const nextBtn = document.getElementById('next-btn');
+
+      // types of trash with representative emoji and score weights (by volume)
+      const TRASH_TYPES = [
+        {name:'保特瓶',emoji:'🥤',size:'small',score:5},
+        {name:'紙類',emoji:'📄',size:'small',score:4},
+        {name:'餐盒',emoji:'🍱',size:'medium',score:10},
+        {name:'塑膠袋',emoji:'🛍️',size:'small',score:6},
+        {name:'保麗龍',emoji:'🧊',size:'medium',score:12},
+        {name:'飲料杯',emoji:'☕',size:'small',score:5},
+        {name:'漂流木/其他',emoji:'🪵',size:'large',score:18}
+      ];
+
+      let score = 0;
+      let collected = 0;
+
+      // helper random
+      function rand(min,max){return Math.random()*(max-min)+min}
+      function pick(arr){return arr[Math.floor(Math.random()*arr.length)]}
+
+      function placeTrash(){
+        // clear existing
+        beach.innerHTML='';
+        const rect = beach.getBoundingClientRect();
+        // we want to place items only in the lower half of visible area
+        const topMin = rect.height * 0.5;
+        const topMax = rect.height - 60; // allow some margin
+
+        for(let i=0;i<TRASH_COUNT;i++){
+          const t = pick(TRASH_TYPES);
+          const el = document.createElement('div');
+          el.className = 'trash ' + t.size;
+          el.dataset.score = t.score;
+          el.dataset.name = t.name;
+          el.title = t.name + '（' + t.score + ' 分）';
+          // choose random position inside container
+          const w = parseFloat(getComputedStyle(el).width) || (t.size==='large'?72:48);
+          const h = parseFloat(getComputedStyle(el).height) || (t.size==='large'?72:48);
+          const left = rand(6, rect.width - w - 6);
+          const top = rand(topMin, topMax - h);
+          el.style.left = left + 'px';
+          el.style.top = top + 'px';
+          // random rotation
+          const deg = Math.floor(rand(-180,180));
+          el.style.transform = `rotate(${deg}deg)`;
+
+          // content
+          const label = document.createElement('div');
+          label.className='label';
+          label.textContent = t.emoji;
+          el.appendChild(label);
+
+          el.addEventListener('click', function(ev){
+            collect(el);
+          });
+
+          beach.appendChild(el);
+        }
+
+        // update HUD
+        score = 0; collected = 0; updateHUD();
+      }
+
+      function collect(el){
+        if(el.classList.contains('collected')) return;
+        const pts = Number(el.dataset.score) || 1;
+        score += pts;
+        collected += 1;
+        el.classList.add('collected');
+        // float to score area animation
+        const rectFrom = el.getBoundingClientRect();
+        const scoreRect = document.querySelector('.scorebox').getBoundingClientRect();
+        const floatEl = el.cloneNode(true);
+        floatEl.style.position='fixed';
+        floatEl.style.left = rectFrom.left + 'px';
+        floatEl.style.top = rectFrom.top + 'px';
+        floatEl.style.margin=0;
+        floatEl.style.zIndex = 120;
+        document.body.appendChild(floatEl);
+        // animate
+        requestAnimationFrame(()=>{
+          floatEl.style.transition = 'transform 700ms ease, left 700ms ease, top 700ms ease, opacity 700ms ease';
+          floatEl.style.left = (scoreRect.left + 10) + 'px';
+          floatEl.style.top = (scoreRect.top + 10) + 'px';
+          floatEl.style.transform = 'scale(.3) rotate(360deg)';
+          floatEl.style.opacity = '0';
+        });
+        setTimeout(()=>floatEl.remove(),800);
+
+        updateHUD();
+
+        // when all collected
+        if(collected >= TRASH_COUNT){
+          setTimeout(()=>showOverlay(),400);
+        }
+      }
+
+      function updateHUD(){
+        scoreEl.textContent = '分數: ' + score;
+        bestEl.textContent = '收集: ' + collected + ' / ' + TRASH_COUNT;
+      }
+
+      function showOverlay(){
+        overlayTitle.textContent = '任務成功';
+        overlayMsg.textContent = `總分 ${score} 分 — 恭喜！`;
+        overlay.classList.add('show');
+      }
+
+      nextBtn.addEventListener('click', function(e){
+        e.preventDefault();
+        // For demo: restart level with new random distribution
+        overlay.classList.remove('show');
+        placeTrash();
+      });
+
+      // on resize, reposition items to stay in lower half
+      let resizeTimeout;
+      window.addEventListener('resize', ()=>{
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(()=>{
+          // re-place to avoid overflow on small screens
+          placeTrash();
+        },250);
+      });
+
+      // initial placement when DOM ready and after small delay to ensure layout
+      window.addEventListener('load', ()=>{
+        placeTrash();
+      });
+
+      // accessibility: keyboard collect (tab to focus and press Enter)
+      document.addEventListener('keydown', function(e){
+        if(e.key === 'Enter' && document.activeElement && document.activeElement.classList.contains('trash')){
+          collect(document.activeElement);
+        }
+      });
+
+    })();
+  </script>
+</body>
+</html>
